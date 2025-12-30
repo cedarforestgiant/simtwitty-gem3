@@ -293,6 +293,33 @@ const DOG_PILE_TEMPLATES = [
   "@{target} for Mayor! At least they reply."
 ];
 
+// Topic Detection - Map keywords to game concepts
+const TOPIC_KEYWORDS = {
+  park: ['park', 'parks', 'green', 'tree', 'trees', 'nature', 'garden', 'grass', 'picnic'],
+  job: ['job', 'jobs', 'work', 'employment', 'unemployed', 'factory', 'factories', 'commercial', 'business', 'hire', 'hiring'],
+  road: ['road', 'roads', 'street', 'streets', 'traffic', 'commute', 'drive', 'driving', 'car', 'infrastructure'],
+  pollution: ['pollution', 'smog', 'dirty', 'air', 'smell', 'toxic', 'cough', 'smoke', 'industrial'],
+  housing: ['home', 'house', 'housing', 'apartment', 'residential', 'living', 'neighborhood', 'rent']
+};
+
+// Detect topics mentioned in text
+function analyzeTopic(text) {
+  const lower = text.toLowerCase();
+  const topics = [];
+  
+  for (const [topic, keywords] of Object.entries(TOPIC_KEYWORDS)) {
+    if (keywords.some(keyword => lower.includes(keyword))) {
+      topics.push(topic);
+    }
+  }
+  
+  // Detect if it's a question
+  const isQuestion = lower.includes('?') || 
+                     /^(what|how|do|does|are|is|can|will|why|where|when|who)\b/i.test(lower.trim());
+  
+  return { topics, isQuestion };
+}
+
 // Sentiment analysis based on player tweet content
 function analyzeSentiment(playerTweet, denizen) {
   const text = playerTweet.toLowerCase();
@@ -327,6 +354,158 @@ function analyzeSentiment(playerTweet, denizen) {
   return 'ignored';
 }
 
+// Reality Check Functions - Query game state for denizen context
+
+// Check if denizen has a park nearby
+function checkNearbyPark(denizen) {
+  const coords = addrToCoord(denizen.home);
+  if (!coords) return { exists: false, distance: 999, quality: 'none' };
+  
+  const currentGrid = get(grid);
+  const parkTiles = [];
+  
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      if (currentGrid[y][x].type === ZONES.PARK) {
+        parkTiles.push({ x, y });
+      }
+    }
+  }
+  
+  if (parkTiles.length === 0) {
+    return { exists: false, distance: 999, quality: 'none' };
+  }
+  
+  const nearest = getNearestTile(coords.x, coords.y, parkTiles);
+  const distance = Math.sqrt(Math.pow(nearest.x - coords.x, 2) + Math.pow(nearest.y - coords.y, 2));
+  
+  let quality = 'far';
+  if (distance <= 3) quality = 'close';
+  else if (distance <= 7) quality = 'moderate';
+  
+  return { 
+    exists: true, 
+    distance: Math.round(distance), 
+    quality,
+    address: getStreetAddress(nearest.x, nearest.y)
+  };
+}
+
+// Check denizen's job situation
+function checkJobSituation(denizen) {
+  if (!denizen.work) {
+    return {
+      employed: false,
+      unemployedDays: denizen.unemployedDays || 0,
+      quality: denizen.unemployedDays > 10 ? 'desperate' : 'looking'
+    };
+  }
+  
+  const homeCoords = addrToCoord(denizen.home);
+  const workCoords = addrToCoord(denizen.work);
+  
+  if (!homeCoords || !workCoords) {
+    return { employed: true, commute: 999, quality: 'unknown' };
+  }
+  
+  const commuteDist = Math.sqrt(
+    Math.pow(workCoords.x - homeCoords.x, 2) + 
+    Math.pow(workCoords.y - homeCoords.y, 2)
+  );
+  
+  let quality = 'long';
+  if (commuteDist <= 5) quality = 'short';
+  else if (commuteDist <= 10) quality = 'moderate';
+  
+  return {
+    employed: true,
+    commute: Math.round(commuteDist),
+    quality,
+    workAddress: getStreetAddress(workCoords.x, workCoords.y),
+    daysMissed: denizen.daysMissed || 0
+  };
+}
+
+// Check road access for denizen
+function checkRoadAccess(denizen) {
+  const coords = addrToCoord(denizen.home);
+  if (!coords) return { hasAccess: false, quality: 'none' };
+  
+  const currentGrid = get(grid);
+  const neighbors = [
+    { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
+  ];
+  
+  let roadCount = 0;
+  for (const { dx, dy } of neighbors) {
+    const nx = coords.x + dx;
+    const ny = coords.y + dy;
+    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+      if (currentGrid[ny][nx].type === ZONES.ROAD) {
+        roadCount++;
+      }
+    }
+  }
+  
+  return {
+    hasAccess: roadCount > 0,
+    quality: roadCount === 0 ? 'none' : roadCount >= 2 ? 'good' : 'basic'
+  };
+}
+
+// Check pollution level at denizen's home
+function checkPollutionLevel(denizen) {
+  const coords = addrToCoord(denizen.home);
+  if (!coords) return { level: 0, quality: 'unknown' };
+  
+  const currentGrid = get(grid);
+  const pollutionGrid = calculatePollution(currentGrid);
+  const level = pollutionGrid[coords.y][coords.x];
+  
+  let quality = 'clean';
+  if (level > 20) quality = 'toxic';
+  else if (level > 10) quality = 'bad';
+  else if (level > 5) quality = 'moderate';
+  
+  return { level: Math.round(level), quality };
+}
+
+// Check if something was recently built near denizen
+function checkRecentBuild(topic, denizen, timeWindow = 50) {
+  const coords = addrToCoord(denizen.home);
+  if (!coords) return { built: false, time: null };
+  
+  const currentGrid = get(grid);
+  const currentTime = get(time);
+  
+  let targetType = null;
+  if (topic === 'park') targetType = ZONES.PARK;
+  else if (topic === 'job') targetType = [ZONES.COMMERCIAL, ZONES.INDUSTRIAL];
+  else if (topic === 'road') targetType = ZONES.ROAD;
+  else if (topic === 'housing') targetType = ZONES.RESIDENTIAL;
+  
+  if (!targetType) return { built: false, time: null };
+  
+  // Simple heuristic: check nearby tiles for the type
+  // We don't track build time, so we'll just check if it exists nearby
+  const searchRadius = 5;
+  for (let y = Math.max(0, coords.y - searchRadius); y < Math.min(GRID_SIZE, coords.y + searchRadius); y++) {
+    for (let x = Math.max(0, coords.x - searchRadius); x < Math.min(GRID_SIZE, coords.x + searchRadius); x++) {
+      const tile = currentGrid[y][x];
+      if (Array.isArray(targetType)) {
+        if (targetType.includes(tile.type)) {
+          return { built: true, address: getStreetAddress(x, y) };
+        }
+      } else if (tile.type === targetType) {
+        return { built: true, address: getStreetAddress(x, y) };
+      }
+    }
+  }
+  
+  return { built: false, time: null };
+}
+
 // Determine emotional state based on denizen's current situation
 function getEmotionalState(denizen) {
   // Happy: employed, no missed days, stable
@@ -352,6 +531,42 @@ function generateDenizenResponse(denizen, playerTweet, sentiment) {
   const personality = denizen.personality || 'optimist';
   const emotionalState = getEmotionalState(denizen);
   
+  // NEW: Semantic Analysis
+  const { topics, isQuestion } = analyzeTopic(playerTweet);
+  
+  // Priority 1: Answer specific questions with facts
+  if (isQuestion && topics.length > 0) {
+    const factualResponse = generateFactualResponse(denizen, topics, playerTweet);
+    if (factualResponse) return factualResponse;
+  }
+  
+  // Priority 2: Acknowledge if player addressed their past complaint
+  if (denizen.lastMention && !denizen.lastMention.resolved && topics.length > 0) {
+    const acknowledgment = generateAcknowledgment(denizen, topics, playerTweet);
+    if (acknowledgment) {
+      // Mark complaint as resolved
+      denizens.update(currentDenizens => {
+        const idx = currentDenizens.findIndex(d => d.id === denizen.id);
+        if (idx !== -1) {
+          const updated = { ...currentDenizens[idx] };
+          if (updated.lastMention) {
+            updated.lastMention.resolved = true;
+          }
+          currentDenizens[idx] = updated;
+        }
+        return currentDenizens;
+      });
+      return acknowledgment;
+    }
+  }
+  
+  // Priority 3: Correct false claims
+  if (topics.length > 0 && !isQuestion) {
+    const correction = generateCorrection(denizen, topics, playerTweet);
+    if (correction) return correction;
+  }
+  
+  // Priority 4: Fallback to personality-based responses
   // Get base responses from personality templates
   let responses = PERSONALITY_RESPONSES[personality][sentiment] || PERSONALITY_RESPONSES[personality]['ignored'];
   
@@ -381,6 +596,201 @@ function generateDenizenResponse(denizen, playerTweet, sentiment) {
   }
   
   return responses[Math.floor(Math.random() * responses.length)];
+}
+
+// Generate factual response to questions
+function generateFactualResponse(denizen, topics, playerTweet) {
+  const responses = [];
+  
+  for (const topic of topics) {
+    if (topic === 'park') {
+      const parkCheck = checkNearbyPark(denizen);
+      if (parkCheck.exists && parkCheck.quality === 'close') {
+        responses.push(`@Mayor Yes! I love the park at ${parkCheck.address}. I go there all the time.`);
+      } else if (parkCheck.exists && parkCheck.quality === 'moderate') {
+        responses.push(`@Mayor There's one at ${parkCheck.address}, but it's a bit of a walk.`);
+      } else if (parkCheck.exists && parkCheck.quality === 'far') {
+        responses.push(`@Mayor The nearest park is at ${parkCheck.address}. Too far for me honestly.`);
+      } else {
+        responses.push(`@Mayor What park? I don't see any green space around here.`);
+      }
+    }
+    
+    if (topic === 'job') {
+      const jobCheck = checkJobSituation(denizen);
+      if (!jobCheck.employed) {
+        if (jobCheck.unemployedDays > 20) {
+          responses.push(`@Mayor Still unemployed. It's been ${jobCheck.unemployedDays} days now.`);
+        } else {
+          responses.push(`@Mayor Looking for work. No luck yet.`);
+        }
+      } else {
+        if (jobCheck.quality === 'short') {
+          responses.push(`@Mayor I work at ${jobCheck.workAddress}. The commute is great!`);
+        } else if (jobCheck.quality === 'moderate') {
+          responses.push(`@Mayor I have a job at ${jobCheck.workAddress}. Commute could be better.`);
+        } else {
+          responses.push(`@Mayor I work at ${jobCheck.workAddress}, but the commute is brutal.`);
+        }
+      }
+    }
+    
+    if (topic === 'road') {
+      const roadCheck = checkRoadAccess(denizen);
+      const jobCheck = checkJobSituation(denizen);
+      
+      if (!roadCheck.hasAccess) {
+        responses.push(`@Mayor No road access here! I'm basically trapped.`);
+      } else if (jobCheck.employed && jobCheck.daysMissed > 0) {
+        responses.push(`@Mayor The roads are broken. I can't get to work!`);
+      } else if (roadCheck.quality === 'good') {
+        responses.push(`@Mayor Road access is fine. No complaints there.`);
+      } else {
+        responses.push(`@Mayor We have a road, but traffic is getting bad.`);
+      }
+    }
+    
+    if (topic === 'pollution') {
+      const pollutionCheck = checkPollutionLevel(denizen);
+      
+      if (pollutionCheck.quality === 'toxic') {
+        responses.push(`@Mayor The air is disgusting! I can barely breathe here.`);
+      } else if (pollutionCheck.quality === 'bad') {
+        responses.push(`@Mayor Pollution is pretty bad. I smell the factories every morning.`);
+      } else if (pollutionCheck.quality === 'moderate') {
+        responses.push(`@Mayor Air quality could be better, but it's tolerable.`);
+      } else {
+        responses.push(`@Mayor Air is clean here. No pollution issues.`);
+      }
+    }
+    
+    if (topic === 'housing') {
+      responses.push(`@Mayor I live at ${denizen.home}. It's home.`);
+    }
+  }
+  
+  // Combine multiple responses if multiple topics
+  if (responses.length > 1) {
+    return responses.slice(0, 2).join(' ');
+  } else if (responses.length === 1) {
+    return responses[0];
+  }
+  
+  return null;
+}
+
+// Generate acknowledgment if player addressed past complaint
+function generateAcknowledgment(denizen, topics, playerTweet) {
+  if (!denizen.lastMention) return null;
+  
+  const complaintTopic = denizen.lastMention.topic;
+  const currentTime = get(time);
+  const timeSince = currentTime - denizen.lastMention.time;
+  
+  // Check if player is addressing the same topic
+  if (!topics.includes(complaintTopic)) return null;
+  
+  // Check if the issue was actually fixed
+  let fixed = false;
+  let response = null;
+  
+  if (complaintTopic === 'road') {
+    const roadCheck = checkRoadAccess(denizen);
+    if (roadCheck.hasAccess && roadCheck.quality !== 'none') {
+      fixed = true;
+      response = `@Mayor You actually fixed the road issue! Thank you!`;
+    }
+  } else if (complaintTopic === 'park') {
+    const parkCheck = checkNearbyPark(denizen);
+    if (parkCheck.exists && parkCheck.quality !== 'far') {
+      fixed = true;
+      response = `@Mayor The new park is great! Thanks for listening.`;
+    }
+  } else if (complaintTopic === 'job') {
+    const jobCheck = checkJobSituation(denizen);
+    if (jobCheck.employed) {
+      fixed = true;
+      response = `@Mayor I found work! Things are looking up.`;
+    }
+  } else if (complaintTopic === 'pollution') {
+    const pollutionCheck = checkPollutionLevel(denizen);
+    if (pollutionCheck.quality === 'clean' || pollutionCheck.quality === 'moderate') {
+      fixed = true;
+      response = `@Mayor Air quality improved! I can breathe again.`;
+    }
+  }
+  
+  // If not fixed, acknowledge the attempt
+  if (!fixed && (playerTweet.toLowerCase().includes('fix') || 
+                 playerTweet.toLowerCase().includes('build') ||
+                 playerTweet.toLowerCase().includes('working'))) {
+    const personality = denizen.personality || 'optimist';
+    if (personality === 'optimist') {
+      response = `@Mayor I appreciate you trying! Hope it works out.`;
+    } else if (personality === 'pessimist') {
+      response = `@Mayor I'll believe it when I see it.`;
+    } else if (personality === 'pragmatist') {
+      response = `@Mayor Okay, but I need to see results soon.`;
+    } else {
+      response = `@Mayor Thanks for the update, Mayor.`;
+    }
+  }
+  
+  return response;
+}
+
+// Generate correction if player makes false claims
+function generateCorrection(denizen, topics, playerTweet) {
+  const text = playerTweet.toLowerCase();
+  
+  // Check if player is claiming to have built something
+  const isClaim = text.includes('built') || text.includes('build') || 
+                  text.includes('added') || text.includes('fixed');
+  
+  if (!isClaim) return null;
+  
+  for (const topic of topics) {
+    if (topic === 'park') {
+      const parkCheck = checkNearbyPark(denizen);
+      if (!parkCheck.exists) {
+        return `@Mayor What park? I don't see any parks around here.`;
+      } else if (parkCheck.quality === 'far') {
+        return `@Mayor There's a park, but it's way too far from me at ${parkCheck.address}.`;
+      }
+    }
+    
+    if (topic === 'road') {
+      const roadCheck = checkRoadAccess(denizen);
+      if (!roadCheck.hasAccess) {
+        return `@Mayor Fixed the roads? I still don't have road access!`;
+      }
+    }
+    
+    if (topic === 'job') {
+      const jobCheck = checkJobSituation(denizen);
+      if (!jobCheck.employed) {
+        return `@Mayor More jobs? I'm still unemployed!`;
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Store denizen's complaint in memory
+function recordDenizenComplaint(denizen, topic) {
+  const currentTime = get(time);
+  
+  // Update denizen's lastMention
+  denizens.update(currentDenizens => {
+    const idx = currentDenizens.findIndex(d => d.id === denizen.id);
+    if (idx !== -1) {
+      const updated = { ...currentDenizens[idx] };
+      updated.lastMention = { topic, time: currentTime, resolved: false };
+      currentDenizens[idx] = updated;
+    }
+    return currentDenizens;
+  });
 }
 
 // Generate a denizen request to @Mayor
@@ -1252,7 +1662,8 @@ export function tick() {
         history: [{ type: 'move_in', time: currentTime, home: homeAddr }],
         isSystem: false,
         personality: pickPersonality(), // NEW: Personality trait
-        playerInteractions: [] // NEW: Track player interactions
+        playerInteractions: [], // NEW: Track player interactions
+        lastMention: null // Track last complaint/request to Mayor
       };
 
       newCreatedDenizens.push(newDenizen);
@@ -1353,7 +1764,8 @@ export function tick() {
                 history: [{ type: 'drift_correction_spawn', time: currentTime, home: addr }],
                 isSystem: false,
                 personality: pickPersonality(), // NEW: Personality trait
-                playerInteractions: [] // NEW: Track player interactions
+                playerInteractions: [], // NEW: Track player interactions
+                lastMention: null // Track last complaint/request to Mayor
               };
               nextDenizens.push(newDenizen);
             }
@@ -1509,6 +1921,15 @@ export function tick() {
     if (struggling.length > 0) {
       const denizen = struggling[Math.floor(Math.random() * struggling.length)];
       const request = generateDenizenRequest(denizen);
+      
+      // Determine topic from request for memory
+      let topic = 'general';
+      if (request.includes('road') || request.includes('commute')) topic = 'road';
+      else if (request.includes('pollution')) topic = 'pollution';
+      else if (request.includes('job')) topic = 'job';
+      else if (request.includes('infrastructure')) topic = 'road';
+      
+      recordDenizenComplaint(denizen, topic);
       addMessage(request, denizen);
     }
   }
