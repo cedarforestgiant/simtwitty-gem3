@@ -39,6 +39,7 @@ export const time = writable(0);
 export const selectedTool = writable(null); // null or one of ZONES values
 export const demand = writable({ residential: 50, commercial: 0, industrial: 0 }); // -100 to 100
 export const denizens = writable([]);
+export const pendingMentions = writable([]); // Track @mentions for response queuing
 
 export const messages = writable([
   { id: 1, author: { name: 'Mayor', isSystem: true }, text: 'Welcome to SimTwitty! Start building zones to attract denizens.', time: 0 }
@@ -92,6 +93,302 @@ const GENERIC_DECLINE_MESSAGES = [
   "Just don't like the vibe here anymore."
 ];
 
+// Personality traits for denizens
+export const PERSONALITIES = ['optimist', 'pessimist', 'pragmatist', 'activist', 'cynic'];
+
+function pickPersonality() {
+  return PERSONALITIES[Math.floor(Math.random() * PERSONALITIES.length)];
+}
+
+// Personality-specific response templates
+const PERSONALITY_RESPONSES = {
+  optimist: {
+    supportive: [
+      "@Mayor I knew you'd come through! You're amazing!",
+      "@Mayor this is exactly what we needed. Thank you!",
+      "@Mayor I have faith in you, Mayor. Let's make this city great!",
+      "@Mayor seeing progress like this makes me smile. Keep it up!",
+      "@Mayor another win for our city! You're on a roll!"
+    ],
+    dismissive: [
+      "@Mayor I'm sure you're doing your best. We'll figure it out!",
+      "@Mayor no worries, I'm confident things will improve.",
+      "@Mayor I still believe in you, Mayor!",
+      "@Mayor Rome wasn't built in a day. We can wait.",
+      "@Mayor hiccups happen. We'll bounce back!"
+    ],
+    actionTaken: [
+      "@Mayor YES! This is incredible! I'm so happy right now!",
+      "@Mayor you actually did it! I knew you would!",
+      "@Mayor this changes everything! Thank you so much!",
+      "@Mayor proof that dreams come true! Best Mayor ever!",
+      "@Mayor I'm telling everyone I know about this!"
+    ],
+    ignored: [
+      "@Mayor I'm sure you're busy. I can wait.",
+      "@Mayor no rush, Mayor. We're patient here.",
+      "@Mayor I still have hope things will get better.",
+      "@Mayor maybe next time! I'm staying positive.",
+      "@Mayor busy schedule, I get it. We're good."
+    ]
+  },
+  pessimist: {
+    supportive: [
+      "@Mayor wow, you actually listened? I'm shocked.",
+      "@Mayor I guess that's something. Don't get my hopes up though.",
+      "@Mayor nice words. Let's see if you actually follow through.",
+      "@Mayor probably a fluke, but thanks anyway.",
+      "@Mayor I was ready to be disappointed, but... okay."
+    ],
+    dismissive: [
+      "@Mayor figures. Just more empty promises.",
+      "@Mayor of course you don't care. Why would you?",
+      "@Mayor typical. I'm out of here.",
+      "@Mayor expected nothing and still disappointed.",
+      "@Mayor another day, another letdown from City Hall."
+    ],
+    actionTaken: [
+      "@Mayor okay, I'll admit it. That actually helped.",
+      "@Mayor well, I didn't expect that. Maybe you're not so bad.",
+      "@Mayor fine, you did something right for once.",
+      "@Mayor don't think this fixes everything, but it's a start.",
+      "@Mayor I hate to say it, but good job."
+    ],
+    ignored: [
+      "@Mayor I knew you wouldn't actually do anything.",
+      "@Mayor just as I expected. Useless.",
+      "@Mayor moving to a city with a competent mayor.",
+      "@Mayor why do I even bother asking?",
+      "@Mayor silence is loud. Message received."
+    ]
+  },
+  pragmatist: {
+    supportive: [
+      "@Mayor good to see you're taking action. What's the timeline?",
+      "@Mayor solid response. How will this affect the budget?",
+      "@Mayor makes sense. Let's see the results.",
+      "@Mayor reasonable approach. Proceed.",
+      "@Mayor I appreciate the transparency."
+    ],
+    dismissive: [
+      "@Mayor that doesn't address the core issue.",
+      "@Mayor nice sentiment, but what's the actual plan?",
+      "@Mayor words without action won't fix anything.",
+      "@Mayor efficient refusal, but a refusal nonetheless.",
+      "@Mayor that's not a solution, that's a deflection."
+    ],
+    actionTaken: [
+      "@Mayor efficient. My commute is already 20% faster.",
+      "@Mayor the numbers don't lie. This actually works.",
+      "@Mayor finally, some practical solutions.",
+      "@Mayor property value up 2%. Acceptable.",
+      "@Mayor logical move. Glad you saw the data."
+    ],
+    ignored: [
+      "@Mayor still waiting on concrete action.",
+      "@Mayor talk is cheap. Show me results.",
+      "@Mayor I'll move somewhere with real infrastructure.",
+      "@Mayor inefficiency at its finest.",
+      "@Mayor no response? Not very professional."
+    ]
+  },
+  activist: {
+    supportive: [
+      "@Mayor YES! This is what real leadership looks like!",
+      "@Mayor I'm organizing a thank you rally. You in?",
+      "@Mayor this is the change we've been fighting for!",
+      "@Mayor the people's voice has been heard! Victory!",
+      "@Mayor solidarity! Thank you for standing with us!"
+    ],
+    dismissive: [
+      "@Mayor that's not nearly enough. We demand more!",
+      "@Mayor half-measures won't cut it. We need real change!",
+      "@Mayor you're not listening to what we actually need.",
+      "@Mayor shameful! The citizens deserve better!",
+      "@Mayor we will not be silenced by your excuses!"
+    ],
+    actionTaken: [
+      "@Mayor THIS is what we've been asking for! Keep it up!",
+      "@Mayor you're finally on the right side of history!",
+      "@Mayor the movement is working! Let's push for more!",
+      "@Mayor direct action gets results! Well done!",
+      "@Mayor power to the people! (And the Mayor, this time)."
+    ],
+    ignored: [
+      "@Mayor we're not going away until you listen.",
+      "@Mayor the people demand action, not excuses!",
+      "@Mayor moving to a city that values its citizens.",
+      "@Mayor your silence speaks volumes about your priorities.",
+      "@Mayor ignore us at your peril. Election year is coming."
+    ]
+  },
+  cynic: {
+    supportive: [
+      "@Mayor oh please, what's the catch?",
+      "@Mayor nice PR stunt. What are you really after?",
+      "@Mayor I'll believe it when I see it.",
+      "@Mayor who paid you to say that?",
+      "@Mayor sure, sure. And pigs fly."
+    ],
+    dismissive: [
+      "@Mayor lol, you actually think that'll work?",
+      "@Mayor spare me the BS, Mayor.",
+      "@Mayor typical politician nonsense.",
+      "@Mayor yawn. Wake me up when you actually do something.",
+      "@Mayor is this a bot account? Feels like it."
+    ],
+    actionTaken: [
+      "@Mayor okay, I'm mildly impressed. Don't let it go to your head.",
+      "@Mayor even a broken clock is right twice a day.",
+      "@Mayor fine, you did one thing right. Congrats.",
+      "@Mayor must be an election year if you're actually working.",
+      "@Mayor barely adequate. But I'll take it."
+    ],
+    ignored: [
+      "@Mayor shocking. Absolutely shocking.",
+      "@Mayor I'm leaving before this city gets worse.",
+      "@Mayor you're a joke, and so is this city.",
+      "@Mayor exactly the incompetence I expected.",
+      "@Mayor 0/10 administration. Would not recommend."
+    ]
+  }
+};
+
+// Denizen request templates for @Mayor mentions
+const DENIZEN_REQUESTS = [
+  // Location-specific
+  "@Mayor we need a road at {home}!",
+  "@Mayor can you fix the pollution near {home}?",
+  "@Mayor my commute from {home} is brutal!",
+  "@Mayor why is {home} so isolated?",
+  "@Mayor {home} needs better infrastructure!",
+  // City-wide
+  "@Mayor this city needs more jobs!",
+  "@Mayor the pollution is unbearable!",
+  "@Mayor we need better infrastructure!",
+  "@Mayor traffic is out of control!",
+  "@Mayor we're overcrowded here!"
+];
+
+// Dog pile templates - when user gets piled on
+const DOG_PILE_TEMPLATES = [
+  // Distraction/Focus
+  "@{target} tell the Mayor to FOCUS! The city is burning (figuratively)!",
+  "@{target} is right, @Mayor stop distracted tweeting and build some roads!",
+  "@Mayor maybe less social media, more city planning? Listen to @{target}!",
+  "@Mayor your approval rating drops every time you tweet nonsense.",
+  "Seriously @Mayor? @{target} is waiting for a response and you tweet this?",
+
+  // Criticism
+  "@{target} remember that bridge to nowhere the Mayor built? Fix that first.",
+  "@Mayor I'm still waiting for water in Zone C, just saying. @{target} knows what's up.",
+  "@Mayor easy to tweet from your ivory tower while we sit in traffic. Right @{target}?",
+  "Yeah @{target}, the Mayor clearly doesn't care about our commute.",
+  
+  // Random Recommendations
+  "@Mayor we need more parks! #GreenCity cc: @{target}",
+  "Hey @{target}, tell the Mayor to build a stadium! Or at least a hot dog stand.",
+  "@Mayor forget roads, we need a monorail! #Monorail",
+  "Agreed with @{target}. More industrial zones! I love the smell of smog.",
+  "@{target} for Mayor! At least they reply."
+];
+
+// Sentiment analysis based on player tweet content
+function analyzeSentiment(playerTweet, denizen) {
+  const text = playerTweet.toLowerCase();
+  const denizensHome = denizen.home ? denizen.home.toLowerCase() : '';
+  const denizensWork = denizen.work ? denizen.work.toLowerCase() : '';
+  
+  // Check if player is addressing their specific situation
+  if (text.includes(denizensHome) || text.includes(denizensWork)) {
+    if (text.includes('build') || text.includes('fix') || text.includes('improve') || text.includes('road')) {
+      return 'actionTaken'; // Player is doing something about THEIR issue
+    }
+  }
+  
+  // Generic action words
+  if (text.includes('build') || text.includes('fix') || text.includes('improve')) {
+    return 'actionTaken';
+  }
+  
+  // Supportive language
+  if (text.includes('sorry') || text.includes('thanks') || text.includes('appreciate') || 
+      text.includes('listen') || text.includes('understand') || text.includes('working on')) {
+    return 'supportive';
+  }
+  
+  // Dismissive language
+  if (text.includes('no') || text.includes('can\'t') || text.includes('won\'t') || 
+      text.includes('impossible') || text.includes('not possible')) {
+    return 'dismissive';
+  }
+  
+  // Generic/ignored
+  return 'ignored';
+}
+
+// Determine emotional state based on denizen's current situation
+function getEmotionalState(denizen) {
+  // Happy: employed, no missed days, stable
+  if (denizen.work && !denizen.daysMissed && denizen.unemployedDays === 0) {
+    return 'happy';
+  }
+  
+  // Desperate: unemployed or long unemployment
+  if (!denizen.work || denizen.unemployedDays > 5) {
+    return 'desperate';
+  }
+  
+  // Angry: just lost job or home
+  if (denizen.daysMissed > 3 || denizen.unemployedDays > 15) {
+    return 'angry';
+  }
+  
+  return 'neutral';
+}
+
+// Generate denizen response based on personality, sentiment, and emotional state
+function generateDenizenResponse(denizen, playerTweet, sentiment) {
+  const personality = denizen.personality || 'optimist';
+  const emotionalState = getEmotionalState(denizen);
+  
+  // Get base responses from personality templates
+  let responses = PERSONALITY_RESPONSES[personality][sentiment] || PERSONALITY_RESPONSES[personality]['ignored'];
+  
+  // Modify response based on emotional state
+  if (emotionalState === 'desperate' && sentiment === 'ignored') {
+    responses = [
+      "@Mayor I'm leaving. This city doesn't care about us.",
+      "@Mayor I can't afford to stay here anymore.",
+      "@Mayor goodbye. I'm done waiting."
+    ];
+  }
+  
+  if (emotionalState === 'angry' && sentiment === 'dismissive') {
+    responses = [
+      "@Mayor you just cost me my home. I hope you're happy.",
+      "@Mayor I trusted you. Never again.",
+      "@Mayor you've lost my vote forever."
+    ];
+  }
+  
+  if (emotionalState === 'happy' && sentiment === 'supportive') {
+    responses = [
+      "@Mayor you're the best! This city is amazing!",
+      "@Mayor thanks for everything you do!",
+      "@Mayor I love living here!"
+    ];
+  }
+  
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+// Generate a denizen request to @Mayor
+function generateDenizenRequest(denizen) {
+  let request = DENIZEN_REQUESTS[Math.floor(Math.random() * DENIZEN_REQUESTS.length)];
+  request = request.replace('{home}', denizen.home || 'here');
+  return request;
+}
 
 // Helper for unique names
 function generateUserName() {
@@ -226,6 +523,73 @@ export function addMessage(text, author = null, context = null) {
   });
 }
 
+// Queue a denizen response to a player @mention
+let mentionHistory = []; // { name, time }
+
+export function triggerDogPile(targetName) {
+  const currentDenizens = get(denizens);
+  const otherDenizens = currentDenizens.filter(d => d.name !== targetName && !d.left);
+  
+  if (otherDenizens.length < 3) return; // Not enough people for a pile
+
+  // Pick 3-5 random pilers
+  const count = 3 + Math.floor(Math.random() * 3);
+  const pilers = [];
+  for (let i = 0; i < count; i++) {
+    if (otherDenizens.length > 0) {
+      const idx = Math.floor(Math.random() * otherDenizens.length);
+      pilers.push(otherDenizens[idx]);
+      otherDenizens.splice(idx, 1); // preventing duplicates
+    }
+  }
+
+  // Queue their messages
+  pendingMentions.update(mentions => {
+    const newMentions = [...mentions];
+    const t = get(time);
+    
+    pilers.forEach((piler, i) => {
+      let tmpl = DOG_PILE_TEMPLATES[Math.floor(Math.random() * DOG_PILE_TEMPLATES.length)];
+      tmpl = tmpl.replace('{target}', targetName);
+      // 2-5 ticks delay, staggered
+      newMentions.push({
+        denizenName: piler.name,
+        playerTweet: "", 
+        forcedResponse: tmpl,
+        respondAt: t + 2 + i + Math.floor(Math.random() * 2)
+      });
+    });
+    return newMentions;
+  });
+}
+
+export function queueDenizenResponse(denizenName, playerTweet) {
+  const t = get(time);
+
+  // Check for Dog Pile condition (Mentioning same person twice within 60 ticks)
+  const recent = mentionHistory.filter(h => h.name === denizenName && t - h.time < 60);
+  
+  if (recent.length >= 1) {
+     triggerDogPile(denizenName);
+  }
+  
+  mentionHistory.push({ name: denizenName, time: t });
+  // Cleanup old history
+  mentionHistory = mentionHistory.filter(h => t - h.time < 100);
+
+  pendingMentions.update(mentions => {
+    // Queue response for 1-3 ticks later
+    const respondAt = t + 1 + Math.floor(Math.random() * 3);
+    return [...mentions, { denizenName, playerTweet, respondAt }];
+  });
+}
+
+// Parse @mention from tweet text
+export function parseMention(text) {
+  const match = text.match(/@(\w+)/);
+  return match ? match[1] : null;
+}
+
 // Simulation Logic
 export function tick() {
   time.update(n => n + 1);
@@ -276,6 +640,24 @@ export function tick() {
   const { roadNetworkMap, networks } = analyzeNetworks(currentGridState);
   const pollutionGrid = calculatePollution(currentGridState);
 
+  // We need to map address strings back to coordinates for pathfinding
+  const addrToCoord = (addr) => {
+    if (!addr) return null;
+    try {
+      const colMatch = addr.match(/[A-Z]+/);
+      const rowMatch = addr.match(/\d+/);
+      if (!colMatch || !rowMatch) return null;
+
+      const colChar = colMatch[0];
+      const rowNum = parseInt(rowMatch[0]);
+      const y = colChar.charCodeAt(0) - 65;
+      const x = rowNum - 1;
+      return { x, y };
+    } catch (e) {
+      return null;
+    }
+  };
+
   // 4. Process Grid Growth based on Demand, Connectivity, and Distance
   // Calculate Global Labor Shortage for determining job cuts
   const laborExcess = totalJobs - totalResidents;
@@ -304,14 +686,6 @@ export function tick() {
     // For this step, let's just calculate active commutes.
 
     // We need to map address strings back to coordinates for pathfinding
-    const addrToCoord = (addr) => {
-      if (!addr) return null;
-      const colChar = addr.match(/[A-Z]+/)[0];
-      const rowNum = parseInt(addr.match(/\d+/)[0]);
-      const y = colChar.charCodeAt(0) - 65;
-      const x = rowNum - 1;
-      return { x, y };
-    };
 
     // Only process a subset of denizens per tick for performance? Or all?
     // Let's try all for now, but limit pathfinding depth if needed.
@@ -547,13 +921,26 @@ export function tick() {
             } else {
               // Decay if isolated or low demand OR Labor Shortage
               if (tile.population > 0) {
-                // Decay conditions: No customers nearby OR Very low demand OR Global Labor Shortage enforcement
-                if (customerDist > 20 || cDemand < -20 || Math.random() < jobCutChance) {
+                // ISOLATION LOGIC
+                if (customerDist > 20) {
+                  tile.daysIsolated = (tile.daysIsolated || 0) + 1;
+                  if (tile.daysIsolated >= 7) {
+                    tile.population = 0; // BUSTED
+                    tile.daysIsolated = 0;
+                  }
+                } else {
+                  tile.daysIsolated = 0; // Connection restored
+                }
+
+                // Decay conditions: Very low demand OR Global Labor Shortage enforcement
+                if (tile.population > 0 && (cDemand < -20 || Math.random() < jobCutChance)) {
                   if (Math.random() < 0.05 || Math.random() < jobCutChance) { // Use higher probability for labor enforcement
                     tile.population -= 1;
                     // Optional: Add decline event if we want to track it
                   }
                 }
+              } else {
+                tile.daysIsolated = 0; // Reset if empty
               }
             }
           } else {
@@ -576,14 +963,28 @@ export function tick() {
                 }
               }
             } else {
-              // Decay if no workers or low demand OR Labor Shortage
+              // Decay if isolated or low demand OR Labor Shortage
               if (tile.population > 0) {
                 const noWorkers = !netInfo || netInfo.resTiles.length === 0;
-                if (noWorkers || iDemand < -20 || Math.random() < jobCutChance) {
+
+                // ISOLATION LOGIC
+                if (noWorkers) {
+                  tile.daysIsolated = (tile.daysIsolated || 0) + 1;
+                  if (tile.daysIsolated >= 7) {
+                    tile.population = 0; // BUSTED
+                    tile.daysIsolated = 0;
+                  }
+                } else {
+                  tile.daysIsolated = 0; // Connection restored
+                }
+
+                if (tile.population > 0 && (iDemand < -20 || Math.random() < jobCutChance)) {
                   if (Math.random() < 0.05 || Math.random() < jobCutChance) {
                     tile.population -= 1;
                   }
                 }
+              } else {
+                tile.daysIsolated = 0; // Reset if empty
               }
             }
           } else {
@@ -620,8 +1021,26 @@ export function tick() {
           const addr = getAddress(x, y);
           const workers = workerCounts.get(addr) || 0;
           const vacancies = tile.population - workers;
+
+          // Find connected networks for this job
+          const jobNetworks = new Set();
+          const neighbors = [
+            { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+            { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
+          ];
+          for (const { dx, dy } of neighbors) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+              if (currentGrid[ny][nx].type === ZONES.ROAD) {
+                const netId = roadNetworkMap[ny][nx];
+                if (netId) jobNetworks.add(netId);
+              }
+            }
+          }
+
           for (let k = 0; k < vacancies; k++) {
-            openJobs.push({ x, y, type: tile.type, addr });
+            openJobs.push({ x, y, type: tile.type, addr, networks: Array.from(jobNetworks) });
           }
         }
       }
@@ -632,38 +1051,68 @@ export function tick() {
       [openJobs[i], openJobs[j]] = [openJobs[j], openJobs[i]];
     }
 
-    // Update Commute Status (Days Missed & Firing)
-    for (let i = 0; i < nextDenizens.length; i++) {
-      const d = nextDenizens[i];
-      if (commuteSuccesses.has(d.id)) {
-        d.daysMissed = 0;
-      } else if (commuteFailures.has(d.id)) {
-        const old = d.daysMissed;
-        d.daysMissed = (d.daysMissed || 0) + 1;
-        if (d.daysMissed >= 7) {
-          // Fire them
-          // Queue message
-          const workAddr = d.work;
-          if (workAddr) {
-            queueMessage("Fired for not showing up!", d, { x: -1, y: -1 }); // Context limited here unless we parse addr
-          }
+    const getAccessibleJobIndex = (homeAddr) => {
+      const coords = addrToCoord(homeAddr);
+      if (!coords) return -1;
 
-          // Reset job
-          d.work = null;
-          d.daysMissed = 0;
-          d.history.push({ type: 'fired', time: currentTime });
-          nextDenizens[i] = { ...d }; // Update ref
-        } else {
-          nextDenizens[i] = { ...d }; // Update ref for daysMissed
+      const homeNetworks = new Set();
+      const neighbors = [
+        { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+        { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
+      ];
+      for (const { dx, dy } of neighbors) {
+        const nx = coords.x + dx;
+        const ny = coords.y + dy;
+        if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+          if (currentGrid[ny][nx].type === ZONES.ROAD) {
+            const netId = roadNetworkMap[ny][nx];
+            if (netId) homeNetworks.add(netId);
+          }
         }
       }
-    }
+
+      return openJobs.findIndex(job => job.networks.some(netId => homeNetworks.has(netId)));
+    };
 
     // Identify Migrations (Decline + Growth pair)
     // If we have both declines and growth, we can treat some as moves
     const moves = [];
     const leaving = [];
     const arriving = [];
+
+    // Update Commute Status (Days Missed & Firing) & Unemployment
+    for (let i = 0; i < nextDenizens.length; i++) {
+      const d = nextDenizens[i];
+      let updated = false;
+
+      // Commute
+      if (commuteSuccesses.has(d.id)) {
+        if (d.daysMissed > 0) { d.daysMissed = 0; updated = true; }
+      } else if (commuteFailures.has(d.id)) {
+        d.daysMissed = (d.daysMissed || 0) + 1;
+        updated = true;
+        if (d.daysMissed >= 7) {
+          if (d.work) queueMessage("Fired for not showing up!", d, { x: -1, y: -1 });
+          d.work = null;
+          d.daysMissed = 0;
+          d.unemployedDays = 0;
+          d.history.push({ type: 'fired', time: currentTime });
+        }
+      }
+
+      // Unemployment
+      if (!d.work && !d.left) {
+        d.unemployedDays = (d.unemployedDays || 0) + 1;
+        updated = true;
+        if (d.unemployedDays > 30) {
+          leaving.push({ x: -1, y: -1, denizenId: d.id });
+        }
+      } else if (d.work) {
+        if (d.unemployedDays > 0) { d.unemployedDays = 0; updated = true; }
+      }
+
+      if (updated) nextDenizens[i] = { ...d };
+    }
 
     // Create pools
     let declinePool = [...resDeclineEvents];
@@ -698,9 +1147,12 @@ export function tick() {
         // Update Work if needed (Assign new job if available in pool AND they don't have one)
         // Preventing job-hopping here prevents "leaking" jobs (leaving old jobs filled but ownerless)
         if (!denizen.work && openJobs.length > 0) {
-          const jobEvent = openJobs.shift();
-          denizen.work = jobEvent.addr;
-          denizen.history.push({ type: 'new_job', time: currentTime, work: denizen.work });
+          const jobIndex = getAccessibleJobIndex(denizen.home);
+          if (jobIndex !== -1) {
+            const jobEvent = openJobs.splice(jobIndex, 1)[0];
+            denizen.work = jobEvent.addr;
+            denizen.history.push({ type: 'new_job', time: currentTime, work: denizen.work });
+          }
         }
 
         nextDenizens[idx] = denizen;
@@ -725,25 +1177,28 @@ export function tick() {
 
         const d = nextDenizens[i];
         if (!d.left && !d.work) {
-          const jobEvent = openJobs.shift();
-          const newWork = jobEvent.addr;
+          const jobIndex = getAccessibleJobIndex(d.home);
+          if (jobIndex !== -1) {
+            const jobEvent = openJobs.splice(jobIndex, 1)[0];
+            const newWork = jobEvent.addr;
 
-          // Update Denizen
-          const updatedDenizen = { ...d };
-          updatedDenizen.work = newWork;
-          updatedDenizen.history = [...(d.history || []), { type: 'new_job', time: currentTime, work: newWork }];
-          nextDenizens[i] = updatedDenizen;
+            // Update Denizen
+            const updatedDenizen = { ...d };
+            updatedDenizen.work = newWork;
+            updatedDenizen.history = [...(d.history || []), { type: 'new_job', time: currentTime, work: newWork }];
+            nextDenizens[i] = updatedDenizen;
 
-          // Social Media Message for finding a job
-          if (Math.random() < 0.3) {
-            const msgs = [
-              `Finally got a job at ${newWork}!`,
-              `Hired! Starting work at ${newWork}.`,
-              `Off to work at ${newWork}. So happy!`,
-              `Unemployment over. Hello ${newWork}.`
-            ];
-            const txt = msgs[Math.floor(Math.random() * msgs.length)];
-            queueMessage(txt, updatedDenizen, { x: jobEvent.x, y: jobEvent.y, type: jobEvent.type });
+            // Social Media Message for finding a job
+            if (Math.random() < 0.3) {
+              const msgs = [
+                `Finally got a job at ${newWork}!`,
+                `Hired! Starting work at ${newWork}.`,
+                `Off to work at ${newWork}. So happy!`,
+                `Unemployment over. Hello ${newWork}.`
+              ];
+              const txt = msgs[Math.floor(Math.random() * msgs.length)];
+              queueMessage(txt, updatedDenizen, { x: jobEvent.x, y: jobEvent.y, type: jobEvent.type });
+            }
           }
         }
       }
@@ -781,8 +1236,11 @@ export function tick() {
 
       // Pair with a new job if available
       if (openJobs.length > 0) {
-        const jobEvent = openJobs.shift(); // Take one
-        workAddr = jobEvent.addr;
+        const jobIndex = getAccessibleJobIndex(homeAddr);
+        if (jobIndex !== -1) {
+          const jobEvent = openJobs.splice(jobIndex, 1)[0];
+          workAddr = jobEvent.addr;
+        }
       }
 
       const newDenizen = {
@@ -792,7 +1250,9 @@ export function tick() {
         work: workAddr,
         since: currentTime,
         history: [{ type: 'move_in', time: currentTime, home: homeAddr }],
-        isSystem: false
+        isSystem: false,
+        personality: pickPersonality(), // NEW: Personality trait
+        playerInteractions: [] // NEW: Track player interactions
       };
 
       newCreatedDenizens.push(newDenizen);
@@ -832,8 +1292,158 @@ export function tick() {
       addMessage(msg.text, author, msg.context);
     }
 
+    // --- RECONCILIATION STEP ---
+    // Strict enforcement: Ensure denizen counts match Grid Population exactly.
+    // This catches bulldozed zones, manual edits, or drift.
+
+    // 1. Group active denizens by Home Address AND Work Address
+    const denizensByAddress = new Map();
+    const workersByAddress = new Map();
+
+    for (let i = 0; i < nextDenizens.length; i++) {
+      const d = nextDenizens[i];
+      if (!d.left) {
+        // Home Map
+        if (d.home) {
+          if (!denizensByAddress.has(d.home)) {
+            denizensByAddress.set(d.home, []);
+          }
+          denizensByAddress.get(d.home).push(i);
+        }
+        // Work Map
+        if (d.work) {
+          if (!workersByAddress.has(d.work)) {
+            workersByAddress.set(d.work, []);
+          }
+          workersByAddress.get(d.work).push(i);
+        }
+      }
+    }
+
+    // 2. Iterate Grid to validate
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const tile = currentGrid[y][x];
+        const addr = getAddress(x, y);
+
+        // --- RESIDENTIAL CHECKS ---
+        const residentIndices = denizensByAddress.get(addr) || [];
+
+        if (tile.type === ZONES.RESIDENTIAL) {
+          // Check for Excess Denizens
+          if (residentIndices.length > tile.population) {
+            const excess = residentIndices.length - tile.population;
+            for (let k = 0; k < excess; k++) {
+              const idxToRemove = residentIndices.pop();
+              const d = nextDenizens[idxToRemove];
+              const updatedD = { ...d, left: currentTime, history: [...(d.history || []), { type: 'evicted', time: currentTime }] };
+              nextDenizens[idxToRemove] = updatedD;
+            }
+          }
+          // Check for Missing Denizens (Drift correction)
+          else if (residentIndices.length < tile.population) {
+            const diff = tile.population - residentIndices.length;
+            for (let k = 0; k < diff; k++) {
+              const newDenizen = {
+                id: generateUserName() + Math.random(),
+                name: generateUserName(),
+                home: addr,
+                work: null,
+                since: currentTime,
+                history: [{ type: 'drift_correction_spawn', time: currentTime, home: addr }],
+                isSystem: false,
+                personality: pickPersonality(), // NEW: Personality trait
+                playerInteractions: [] // NEW: Track player interactions
+              };
+              nextDenizens.push(newDenizen);
+            }
+          }
+        } else {
+          // Not Residential: Evict illegal tenants
+          if (residentIndices.length > 0) {
+            for (const idx of residentIndices) {
+              const d = nextDenizens[idx];
+              const updatedD = { ...d, left: currentTime, history: [...(d.history || []), { type: 'evicted_bulldoze', time: currentTime }] };
+              nextDenizens[idx] = updatedD;
+            }
+          }
+        }
+
+        // --- COMMERCIAL/INDUSTRIAL CHECKS (JOBS) ---
+        const workerIndices = workersByAddress.get(addr) || [];
+
+        if (tile.type === ZONES.COMMERCIAL || tile.type === ZONES.INDUSTRIAL) {
+          // 1. Check for Excess Workers (More people claim to work here than capacity/population)
+          if (workerIndices.length > tile.population) {
+            const excess = workerIndices.length - tile.population;
+            for (let k = 0; k < excess; k++) {
+              const idxToFire = workerIndices.pop();
+              const d = nextDenizens[idxToFire];
+              // Fire them (work = null)
+              const updatedD = { ...d, work: null, history: [...(d.history || []), { type: 'fired_excess', time: currentTime }] };
+              nextDenizens[idxToFire] = updatedD;
+              if (!d.isSystem) queueMessage("Laid off due to downsizing.", updatedD, { x, y, type: tile.type });
+            }
+          }
+          // 2. Check for Missing Workers
+          else if (workerIndices.length < tile.population) {
+            // Do nothing here. We do NOT spawn commuters.
+            // The grid population will be corrected (contracted) in the next phase to match the worker count.
+          }
+        }
+      }
+    }
+
+    // 3. Final Pass: Found orphans
+    // If a denizen works at an address that is no longer a valid workplace, fire them.
+    for (let i = 0; i < nextDenizens.length; i++) {
+      const d = nextDenizens[i];
+      if (!d.left && d.work) {
+        const coords = addrToCoord(d.work);
+        let validJob = false;
+        // Valid if it maps to a coord AND that coord is C/I
+        if (coords) {
+          const tile = currentGrid[coords.y][coords.x];
+          if (tile.type === ZONES.COMMERCIAL || tile.type === ZONES.INDUSTRIAL) {
+            validJob = true;
+          }
+        }
+
+        if (!validJob) {
+          const updatedD = { ...d, work: null, history: [...(d.history || []), { type: 'workplace_demolished', time: currentTime }] };
+          nextDenizens[i] = updatedD;
+        }
+      }
+    }
+
     return nextDenizens;
   });
+
+  // 6. GRID CONTRACTION (Self-Containment Enforcement)
+  {
+    const finalDenizens = get(denizens);
+    const workerCounts = new Map();
+    for (const d of finalDenizens) {
+      if (!d.left && d.work) {
+        workerCounts.set(d.work, (workerCounts.get(d.work) || 0) + 1);
+      }
+    }
+
+    grid.update(g => {
+      // Must map to trigger reactivity on deep change if reference changes
+      return g.map((row, y) => row.map((tile, x) => {
+        if (tile.type === ZONES.COMMERCIAL || tile.type === ZONES.INDUSTRIAL) {
+          const addr = getAddress(x, y);
+          const workers = workerCounts.get(addr) || 0;
+          if (tile.population > workers) {
+            // Contract grid population to match reality
+            return { ...tile, population: workers };
+          }
+        }
+        return tile;
+      }));
+    });
+  }
 
   // Social Media / Messages (Global Events)
   if (resGrowthEvents.length > 0) {
@@ -845,8 +1455,8 @@ export function tick() {
         "New in town, looking for recommendations.",
         "Wow, this city is growing fast!"
       ];
-      // Pick a random NEW denizen
-      const newDenizens = get(denizens).filter(d => d.since === currentTime);
+      // Pick a random NEW denizen (excluding commuters)
+      const newDenizens = get(denizens).filter(d => d.since === currentTime && !d.isSystem);
       if (newDenizens.length > 0) {
         const author = newDenizens[Math.floor(Math.random() * newDenizens.length)];
         addMessage(msgs[Math.floor(Math.random() * msgs.length)], author);
@@ -866,6 +1476,41 @@ export function tick() {
     ];
     // Pick random existing denizen
     addMessage(thoughts[Math.floor(Math.random() * thoughts.length)]);
+  }
+
+  // Process pending denizen responses to player @mentions
+  const currentMentions = get(pendingMentions);
+  const mentionsToRespond = currentMentions.filter(m => m.respondAt === currentTime);
+  
+  for (const mention of mentionsToRespond) {
+    const denizen = get(denizens).find(d => d.name === mention.denizenName && !d.left);
+    if (denizen) {
+      if (mention.forcedResponse) {
+        // Dog pile override!
+        addMessage(mention.forcedResponse, denizen);
+      } else {
+        const sentiment = analyzeSentiment(mention.playerTweet, denizen);
+        const response = generateDenizenResponse(denizen, mention.playerTweet, sentiment);
+        addMessage(response, denizen);
+      }
+    }
+  }
+  
+  // Clean up processed mentions
+  pendingMentions.update(m => m.filter(x => x.respondAt > currentTime));
+  
+  // Denizen initiates @mention to Mayor (~every 120 ticks, max 1 per tick)
+  if (get(time) % 120 === 0 && Math.random() < 0.3) {
+    const currentDenizens = get(denizens);
+    const struggling = currentDenizens.filter(d => 
+      !d.left && (d.unemployedDays > 10 || d.daysMissed > 3 || (d.work && get(time) - d.since > 50))
+    );
+    
+    if (struggling.length > 0) {
+      const denizen = struggling[Math.floor(Math.random() * struggling.length)];
+      const request = generateDenizenRequest(denizen);
+      addMessage(request, denizen);
+    }
   }
 
   // Tax income every 5 ticks
@@ -1128,4 +1773,3 @@ export function build(x, y, toolType) {
     });
   }
 }
-

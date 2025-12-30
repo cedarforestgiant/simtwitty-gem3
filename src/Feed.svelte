@@ -1,18 +1,140 @@
 <script>
-  import { messages, population, addMessage, time } from './store.js';
+  import { messages, population, addMessage, time, denizens, queueDenizenResponse, parseMention } from './store.js';
   import { fade, fly } from 'svelte/transition';
 
   let tweetText = '';
   let selectedAuthor = null;
 
+  // Autocomplete State
+  let uniqueAuthors = [];
+  let showAutocomplete = false;
+  let filterTerm = '';
+  let filteredAuthors = [];
+  let selectedIndex = 0;
+  let textareaRef;
+  
+  $: {
+    // Extract unique authors from messages who have posted
+    const names = new Set();
+    $messages.forEach(msg => {
+      if (msg.author && msg.author.name) {
+        names.add(msg.author.name);
+      }
+    });
+    // Convert to array and sort
+    uniqueAuthors = Array.from(names).sort();
+  }
+  
+  // Filter authors when term changes
+  $: {
+    if (filterTerm) {
+      filteredAuthors = uniqueAuthors.filter(name => 
+        name.toLowerCase().includes(filterTerm.toLowerCase())
+      ).slice(0, 5); // Limit to 5 suggestions
+    } else {
+      filteredAuthors = uniqueAuthors.slice(0, 5);
+    }
+  }
+
+  function handleInput(e) {
+    analyzeText(e.target);
+  }
+  
+  function analyzeText(target) {
+    const cursor = target.selectionStart;
+    const text = target.value;
+    
+    // Find the last '@' before the cursor
+    const lastAt = text.lastIndexOf('@', cursor - 1);
+    
+    if (lastAt !== -1) {
+      // Check if there are invalid characters (like spaces) between @ and cursor
+      // We allow standard username characters. For now, let's say no spaces.
+      const textAfterAt = text.slice(lastAt + 1, cursor);
+      
+      if (!textAfterAt.includes(' ')) {
+        showAutocomplete = true;
+        filterTerm = textAfterAt;
+        selectedIndex = 0;
+        return;
+      }
+    }
+    
+    showAutocomplete = false;
+    filterTerm = '';
+  }
+
+  function selectName(name) {
+    if (!textareaRef) return;
+    
+    const cursor = textareaRef.selectionStart;
+    const text = tweetText;
+    const lastAt = text.lastIndexOf('@', cursor - 1);
+    
+    if (lastAt !== -1) {
+      const before = text.slice(0, lastAt);
+      const after = text.slice(cursor);
+      tweetText = `${before}@${name} ${after}`;
+      
+      // Reset state
+      showAutocomplete = false;
+      filterTerm = '';
+      
+      // Focus back and set cursor
+      setTimeout(() => {
+        textareaRef.focus();
+        const newCursorPos = lastAt + name.length + 2; // +2 for @ and space
+        textareaRef.setSelectionRange(newCursorPos, newCursorPos);
+      }, 0);
+    }
+  }
+
   function handleTweet() {
     if (tweetText.trim()) {
       addMessage(tweetText, { name: 'Mayor', isSystem: true });
+      
+      // Check if player @mentioned a denizen
+      const mentionedName = parseMention(tweetText);
+      if (mentionedName) {
+        // Find the denizen by name (case-insensitive)
+        const denizen = $denizens.find(d => 
+          d.name.toLowerCase() === mentionedName.toLowerCase() && !d.left
+        );
+        
+        if (denizen) {
+          // Queue a response from this denizen
+          queueDenizenResponse(denizen.name, tweetText);
+        }
+      }
+      
       tweetText = '';
     }
   }
 
   function handleKeydown(e) {
+    if (showAutocomplete && filteredAuthors.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % filteredAuthors.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex - 1 + filteredAuthors.length) % filteredAuthors.length;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        selectName(filteredAuthors[selectedIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        showAutocomplete = false;
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleTweet();
@@ -35,12 +157,31 @@
   
   <div class="tweet-input">
     <textarea 
+      bind:this={textareaRef}
       bind:value={tweetText} 
       placeholder="What's happening in the city, Mayor?"
       on:keydown={handleKeydown}
+      on:input={handleInput}
+      on:click={handleInput}
     ></textarea>
+    
+    {#if showAutocomplete && filteredAuthors.length > 0}
+      <ul class="autocomplete-list">
+        {#each filteredAuthors as author, i}
+          <!-- svelte-ignore a11y-click-events-have-key-events -->
+          <li 
+            class:selected={i === selectedIndex}
+            on:click={() => selectName(author)}
+            on:mouseenter={() => selectedIndex = i}
+          >
+            @{author}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
     <div class="tweet-actions">
-      <button on:click={handleTweet} disabled={!tweetText.trim()}>Tweet</button>
+      <button on:click={handleTweet} disabled={!tweetText.trim()}>Twit 'em</button>
     </div>
   </div>
 
@@ -105,6 +246,18 @@
                       Moved {event.from} &rarr; {event.to}
                     {:else if event.type === 'new_job'}
                       Started job at {event.work}
+                    {:else if event.type === 'fired'}
+                      Lost job (fired for absence)
+                    {:else if event.type === 'fired_excess'}
+                      Laid off (downsizing)
+                    {:else if event.type === 'workplace_demolished'}
+                      Lost job (workplace closed)
+                    {:else if event.type === 'evicted'}
+                      Evicted (overcrowding)
+                    {:else if event.type === 'evicted_bulldoze'}
+                      Evicted (zone demolished)
+                    {:else if event.type === 'drift_correction_spawn'}
+                      Moved in (correction)
                     {:else if event.type === 'left_city'}
                       Left the city
                     {/if}
@@ -145,6 +298,41 @@
     padding: 1rem;
     background: white;
     border-bottom: 1px solid #e1e8ed;
+    position: relative;
+  }
+
+  .autocomplete-list {
+    position: absolute;
+    top: 70px; /* Below textarea */
+    left: 1rem;
+    width: calc(100% - 2rem);
+    background: white;
+    border: 1px solid #e1e8ed;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    z-index: 20;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .autocomplete-list li {
+    padding: 0.5rem;
+    cursor: pointer;
+    border-bottom: 1px solid #f5f8fa;
+    color: #14171a;
+    font-size: 0.9rem;
+  }
+
+  .autocomplete-list li:last-child {
+    border-bottom: none;
+  }
+
+  .autocomplete-list li:hover, .autocomplete-list li.selected {
+    background-color: #f5f8fa;
+    color: #1da1f2;
   }
 
   .tweet-input textarea {

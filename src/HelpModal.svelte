@@ -116,6 +116,8 @@
                         <th>Home</th>
                         <th>Work</th>
                         <th>Status</th>
+                        <th>Missed</th>
+                        <th>Unemployed</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -125,6 +127,8 @@
                         <td>{d.home}</td>
                         <td>{d.work || '-'}</td>
                         <td>{d.left ? 'Left' : 'Active'}</td>
+                        <td>{d.daysMissed || 0}</td>
+                        <td>{d.unemployedDays || 0}</td>
                     </tr>
                     {/each}
                 </tbody>

@@ -15,7 +15,7 @@
     <span class="value">{$population}</span>
   </div>
   <div class="stat">
-    <span class="label">Time</span>
+    <span class="label">Day</span>
     <span class="value">{$time}</span>
   </div>
   
