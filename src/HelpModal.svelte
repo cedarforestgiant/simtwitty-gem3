@@ -137,6 +137,7 @@
     </section>
     
     {/if}
+    <div class="version">v0.0.0</div>
   </div>
 </div>
 
@@ -339,5 +340,13 @@
   tr.left {
       opacity: 0.5;
       background: #f9f9f9;
+  }
+  
+  .version {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    font-size: 0.8rem;
+    color: #aaa;
   }
 </style>
