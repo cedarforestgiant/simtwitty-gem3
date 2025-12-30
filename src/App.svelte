@@ -34,6 +34,9 @@
       <Feed />
     </aside>
   </div>
+  <div class="plug">
+    Lovingly built with <a href="https://multi.dev" target="_blank" rel="noopener noreferrer">Multi</a>
+  </div>
 </div>
 
 <style>
@@ -70,5 +73,22 @@
     overflow: auto;
     max-width: 100%;
     padding: 1rem;
+  }
+  
+  .plug {
+    position: fixed;
+    bottom: 0.5rem;
+    right: 1rem;
+    font-size: 0.8rem;
+    color: #aaa;
+  }
+  
+  .plug a {
+    color: #1da1f2;
+    text-decoration: none;
+  }
+  
+  .plug a:hover {
+    text-decoration: underline;
   }
 </style>
